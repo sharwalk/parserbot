@@ -17,11 +17,11 @@ def get_news():
     response = requests.get(url)
     soup = BeautifulSoup(response.content, 'html.parser')
     
-    news_cards = soup.find_all('div', class_='_section-with-pagination_1jnog_1118')
+    news_cards = soup.find('div', class_='_section-with-pagination_1jnog_1118').find_all('div', class_='_card_1vlem_1')
     
     news_list = []
     
-    for card in news_cards:
+    for card in news_cards[:5]:  # Обрабатываем только первые 5 новостей
         title = card.find('a', class_='_title_1vlem_60').text.strip()
         link = "https://stopgame.ru" + card.find('a', class_='_title_1vlem_60')['href']
         
@@ -91,14 +91,32 @@ async def send_to_telegram(bot, chat_id, news):
         
         await bot.send_photo(chat_id=chat_id, photo=item['image'], caption=caption, parse_mode='Markdown')
 
+def display_and_select_news(news):
+    print("Доступные новости:")
+    for i, item in enumerate(news[:5], 1):
+        print(f"{i}. {item['title']}")
+    
+    while True:
+        try:
+            choice = int(input("Выберите номер новости для публикации (1-5): "))
+            if 1 <= choice <= 5:
+                return [news[choice - 1]]
+            else:
+                print("Пожалуйста, выберите число от 1 до 5.")
+        except ValueError:
+            print("Пожалуйста, введите корректное число.")
+
 async def main():
     bot_token = '7027432337:AAFL2bQ59f7mcF_W1MxrP50TW8GeL-nv9OQ'
     chat_id = '-1002171314359'  # реальный ID
     
     bot = Bot(token=bot_token)
     news = get_news()
-    await send_to_telegram(bot, chat_id, news)
-    print("Новости успешно отправлены в Telegram")
+    
+    selected_news = display_and_select_news(news)
+    
+    await send_to_telegram(bot, chat_id, selected_news)
+    print("Выбранная новость успешно отправлена в Telegram")
 
 if __name__ == "__main__":
     asyncio.run(main())
