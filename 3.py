@@ -3,19 +3,22 @@ nest_asyncio.apply()
 
 import asyncio
 import sys
+import httpx
 
 if sys.platform.startswith('win'):
     asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
 
-import requests
 from bs4 import BeautifulSoup
 import g4f
 from telegram import Bot, InputMediaPhoto
 
-def get_news():
+async def get_news():
     url = "https://stopgame.ru/news"
-    response = requests.get(url)
-    soup = BeautifulSoup(response.content, 'html.parser')
+    async with httpx.AsyncClient() as client:
+        response = await client.get(url)
+        content = response.text
+    
+    soup = BeautifulSoup(content, 'html.parser')
     
     news_cards = soup.find('div', class_='_section-with-pagination_1jnog_1118').find_all('div', class_='_card_1vlem_1')
     
@@ -28,7 +31,7 @@ def get_news():
         image_tag = card.find('img', class_='_image_1vlem_20 img') or card.find('img')
         image = image_tag['src'] if image_tag else "Изображение не найдено"
         
-        news_content = get_news_content(link)
+        news_content = await get_news_content(link)
         
         # Перефразируем заголовок и содержание
         rephrased_title, rephrased_content = rephrase_for_telegram(title, news_content)
@@ -42,9 +45,12 @@ def get_news():
     
     return news_list
 
-def get_news_content(url):
-    response = requests.get(url)
-    soup = BeautifulSoup(response.content, 'html.parser')
+async def get_news_content(url):
+    async with httpx.AsyncClient() as client:
+        response = await client.get(url)
+        content = response.text
+    
+    soup = BeautifulSoup(content, 'html.parser')
     
     content = ""
     paragraphs = soup.find_all('p', class_='_text_12po9_111')
@@ -111,12 +117,21 @@ async def main():
     chat_id = '-1002171314359'  # реальный ID
     
     bot = Bot(token=bot_token)
-    news = get_news()
     
-    selected_news = display_and_select_news(news)
-    
-    await send_to_telegram(bot, chat_id, selected_news)
-    print("Выбранная новость успешно отправлена в Telegram")
+    try:
+        news = await get_news()
+        
+        selected_news = display_and_select_news(news)
+        
+        await send_to_telegram(bot, chat_id, selected_news)
+        print("Выбранная новость успешно отправлена в Telegram")
+        
+        # Добавляем небольшую задержку перед завершением
+        await asyncio.sleep(1)
+    except Exception as e:
+        print(f"Произошла ошибка: {e}")
+    finally:
+        await bot.close()
 
 if __name__ == "__main__":
     asyncio.run(main())
