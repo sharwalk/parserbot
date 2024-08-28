@@ -117,14 +117,24 @@ async def publish_news():
     chat_id = '-1002171314359'
     bot = Bot(token=bot_token)
 
+    news_count = 0  # Счетчик опубликованных новостей
+    start_time = datetime.now()  # Запоминаем время начала
+
     while True:
         now = datetime.now()
-        if now.time() in [time(9, 0), time(18, 0)]:  # Публикуем в 9:00 и 18:00
+        elapsed_time = (now - start_time).seconds  # Время, прошедшее с начала
+
+        if elapsed_time >= 3600:  # Если прошло 1 час
+            break  # Выходим из цикла
+
+        if news_count < 2:  # Публикуем не более 2 новостей
             news = await get_news()
             if news:
                 await send_to_telegram(bot, chat_id, news)
-            await asyncio.sleep(60)  # Ждем 1 минуту перед следующей проверкой
-        await asyncio.sleep(1)  # Проверяем каждую секунду
+                news_count += 1  # Увеличиваем счетчик новостей
+            await asyncio.sleep(60)  # Ждем 1 минуту перед следующей публикацией
+        else:
+            await asyncio.sleep(1)  # Проверяем каждую секунду
 
 if __name__ == "__main__":
     asyncio.run(publish_news())
