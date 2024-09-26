@@ -3,106 +3,92 @@ nest_asyncio.apply()
 
 import asyncio
 import sys
+from concurrent.futures import ThreadPoolExecutor
+from functools import partial
 
 if sys.platform.startswith('win'):
     asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
 
-import requests
+import aiohttp
 from bs4 import BeautifulSoup
 import g4f
 from telegram import Bot, InputMediaPhoto
-
-def get_news():
+async def get_news():
     url = "https://stopgame.ru/news"
-    response = requests.get(url)
-    soup = BeautifulSoup(response.content, 'html.parser')
-    
+    async with aiohttp.ClientSession() as session:
+        async with session.get(url) as response:
+            content = await response.text()
+
+    soup = BeautifulSoup(content, 'html.parser')
     news_cards = soup.find_all('div', class_='_card_1vlem_1')
-    
+
     news_list = []
-    
-    for card in news_cards[:5]:  # Обрабатываем только первые 5 новостей
-        title = card.find('a', class_='_title_1vlem_60').text.strip()
+    tasks = []
+
+    for card in news_cards[:5]:
+        original_title = card.find('a', class_='_title_1vlem_60').text.strip()
         link = "https://stopgame.ru" + card.find('a', class_='_title_1vlem_60')['href']
-        
+    
         image_tag = card.find('img', class_='_image_1vlem_20 img') or card.find('img')
         image = image_tag['src'] if image_tag else "Изображение не найдено"
-        
-        news_content = get_news_content(link)
-        
-        # Перефразируем заголовок и содержание
-        rephrased_title, rephrased_content = rephrase_for_telegram(title, news_content)
-        
-        news_list.append({
-            'title': rephrased_title,
-            'link': link,
-            'image': image,
-            'content': rephrased_content
-        })
     
+        tasks.append(asyncio.create_task(process_news(original_title, link, image)))
+
+    news_list = await asyncio.gather(*tasks)
     return news_list
 
-def get_news_content(url):
-    response = requests.get(url)
-    soup = BeautifulSoup(response.content, 'html.parser')
-    
-    content = ""
+async def process_news(original_title, link, image):
+    news_content = await get_news_content(link)
+    return {
+        'original_title': original_title,
+        'link': link,
+        'image': image,
+        'content': news_content
+    }
+
+async def get_news_content(url):
+    async with aiohttp.ClientSession() as session:
+        async with session.get(url) as response:
+            content = await response.text()
+
+    soup = BeautifulSoup(content, 'html.parser')
+
     paragraphs = soup.find_all('p', class_='_text_12po9_111')
     quotes = soup.find_all('blockquote')
-    
-    for p in paragraphs:
-        content += p.text.strip() + "\n\n"
-    
-    for q in quotes:
-        content += "Цитата: " + q.text.strip() + "\n\n"
-    
+
+    content = "\n\n".join([p.text.strip() for p in paragraphs])
+    content += "\n\n" + "\n\n".join([f"Цитата: {q.text.strip()}" for q in quotes])
+
     return content.strip()
 
-def rephrase_for_telegram(title, content):
-    prompt = f"""Перефразируй следующий заголовок и содержание новости в формат телеграм-поста. 
-    Сделай текст более кратким и привлекательным для читателей.
-    
-    Заголовок: {title}
-    
-    Содержание:
-    {content}
-    
-    Пожалуйста, верни результат в формате:
-    Заголовок: <перефразированный заголовок>
-    Содержание: <перефразированное содержание>
-    """
-    
-    response = g4f.ChatCompletion.create(
-        model="gpt-3.5-turbo",
-        messages=[{"role": "user", "content": prompt}],
-    )
-    
-    # Разделяем ответ на заголовок и содержание
-    lines = response.split('\n')
-    rephrased_title = lines[0].replace('Заголовок: ', '').strip()
-    rephrased_content = '\n'.join(lines[2:]).replace('Содержание: ', '').strip()
-    
-    return rephrased_title, rephrased_content
-
 async def send_to_telegram(bot, chat_id, news):
+    tasks = []
     for item in news:
-        caption = f"*{item['title']}*\n\n{item['content']}\n\n[Подробнее]({item['link']})\n\n"
-        caption += "Больше статей и обзоров можно приобрести у автора Максим Кузьмин на бирже текстов Адвего: https://advego.com/shop/find/?so=1&a=MaksimKuzmin3"
+        caption = f"✨ *{item['original_title']}*\n\n"
+        caption += f"📰 {item['content']}\n\n"
+        caption += f"[Подробнее]({item['link']})\n\n"
+        caption += "🔗 Больше статей и обзоров можно приобрести у автора Максим Кузьмин на бирже текстов Адвего: https://advego.com/shop/find/?so=1&a=MaksimKuzmin3"
         
+        caption += "\n\n---\n\n"  # Разделитель между новостями
+        
+        tasks.append(send_single_news(bot, chat_id, item['image'], caption))
+    
+    await asyncio.gather(*tasks)
+
+async def send_single_news(bot, chat_id, image, caption):
+    try:
+        await bot.send_photo(chat_id=chat_id, photo=image, caption=caption, parse_mode='Markdown')
+    except Exception as e:
+        print(f"Ошибка при отправке сообщения: {e}")
         try:
-            await bot.send_photo(chat_id=chat_id, photo=item['image'], caption=caption, parse_mode='Markdown')
+            await bot.send_message(chat_id=chat_id, text=caption, parse_mode='Markdown')
         except Exception as e:
-            print(f"Ошибка при отправке сообщения: {e}")
-            # Попробуем отправить без изображения, если возникла ошибка
-            try:
-                await bot.send_message(chat_id=chat_id, text=caption, parse_mode='Markdown')
-            except Exception as e:
-                print(f"Ошибка при отправке текстового сообщения: {e}")
+            print(f"Ошибка при отправке текстового сообщения: {e}")
 
 def display_and_select_news(news):
     print("Доступные новости:")
     for i, item in enumerate(news, 1):
-        print(f"{i}. {item['title']}")
+        print(f"{i}. {item['original_title']}")
     
     while True:
         try:
@@ -116,10 +102,8 @@ def display_and_select_news(news):
 
 async def main():
     from config import BOT_TOKEN, CHAT_ID
-    BOT_TOKEN = BOT_TOKEN
-    CHAT_ID = CHAT_ID    
     bot = Bot(token=BOT_TOKEN)
-    news = get_news()
+    news = await get_news()
     
     if not news:
         print("Не удалось получить новости. Проверьте подключение к интернету или доступность сайта.")
@@ -137,18 +121,5 @@ import logging
 и отправляет в Telegram канал. Пользователь может выбрать одну новость для публикации.
 """
 
-import subprocess
-import sys
-
-def update_libraries():
-    libraries = [
-        'Flask', 'httpx', 'beautifulsoup4', 'g4f', 'python-telegram-bot', 
-        'nest_asyncio', 'requests', 'httpcore', 'anyio'
-    ]
-    for lib in libraries:
-        subprocess.check_call([sys.executable, "-m", "pip", "install", "--upgrade", lib])
-
 if __name__ == "__main__":
-    update_libraries()
     asyncio.run(main())
-   
